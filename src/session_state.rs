@@ -16,6 +16,8 @@ pub(crate) struct SessionState<'a> {
     pub pending_server_packet_ids: Vec<u16, 10>,
 
     packet_id: u16,
+    pub authenticated: bool,
+    pub generated_challenge: Option<[u8; 12]>,
     active: bool,
     was_reset: bool,
 }
@@ -24,6 +26,8 @@ impl<'a> SessionState<'a> {
     pub fn new(id: String<64>, buffer: &'a mut [u8], max_tx_size: usize) -> SessionState<'a> {
         SessionState {
             active: false,
+            authenticated: false,
+            generated_challenge: None,
             client_id: id,
             packet_id: 1,
             repub: RepublicationBuffer::new(buffer, max_tx_size),

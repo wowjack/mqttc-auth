@@ -24,6 +24,10 @@ varint-rs = {version = "2.2", default-features = false }
 serde = { version = "1", features = ["derive"], default-features = false }
 smlang = "0.6.0"
 embedded-nal = "0.8"
+poly1305 = "0.8.0"
+speck-cipher = "0.0.1"
+rand_chacha = "0.3.1"
+rand = "0.8.5"
 
 [features]
 default = []

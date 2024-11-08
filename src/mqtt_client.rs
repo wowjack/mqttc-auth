@@ -1,13 +1,5 @@
 use crate::{
-    de::{received_packet::ReceivedPacket, PacketReader},
-    network_manager::InterfaceHolder,
-    packets::{ConnAck, Connect, PingReq, Pub, PubAck, PubComp, PubRec, PubRel, SubAck, Subscribe},
-    publication::Publication,
-    reason_codes::ReasonCode,
-    session_state::SessionState,
-    types::{Auth, Properties, TopicFilter, Utf8String},
-    will::SerializedWill,
-    ConfigBuilder, Error, MinimqError, Property, ProtocolError, QoS, {debug, error, info, warn},
+    auth::{compute_tag, validate_tag}, de::{received_packet::ReceivedPacket, PacketReader}, debug, error, info, network_manager::InterfaceHolder, packets::{AuthP, ConnAck, Connect, PingReq, Pub, PubAck, PubComp, PubRec, PubRel, SubAck, Subscribe}, publication::Publication, reason_codes::ReasonCode, session_state::SessionState, types::{Auth, Properties, TopicFilter, Utf8String}, warn, will::SerializedWill, ConfigBuilder, Error, MinimqError, Property, ProtocolError, QoS, KEY
 };
 
 use core::convert::{TryFrom, TryInto};
@@ -19,19 +11,22 @@ use embedded_time::{
 use embedded_nal::TcpClientStack;
 
 use heapless::String;
+use rand::Rng;
+use rand_chacha::rand_core::SeedableRng;
 
 use core::str::FromStr;
 
 mod sm {
 
-    use crate::{de::received_packet::ReceivedPacket, packets::ConnAck};
+    use crate::{de::received_packet::ReceivedPacket, packets::AuthP};
     use smlang::statemachine;
 
     statemachine! {
         transitions: {
             *Disconnected + TcpConnected = Restart,
             Restart + SentConnect = Establishing,
-            Establishing + Connected(ConnAck<'a>) [ handle_connack ] = Active,
+            Establishing + Connected(AuthP) [ handle_auth ] = Authenticating,
+            Authenticating + Auth = Active,
 
             Active + SendTimeout = Disconnected,
             _ + ProtocolError = Disconnected,
@@ -205,44 +200,16 @@ where
         Ok(())
     }
 
-    fn handle_connack(&mut self, acknowledge: &ConnAck<'_>) -> Result<(), Self::GuardError> {
-        acknowledge.reason_code.as_result()?;
-
-        // Reset the session state upon connection with a broker that doesn't have a session state
-        // saved for us.
-        if !acknowledge.session_present {
-            self.session_state.reset();
-            self.pending_subscriptions.clear();
-        }
-
-        // If the server doesn't specify a send quota, assume it's 65535 as required by the spec
-        // section 3.2.2.3.3 - this value is not part of the session state and is reset for each
-        // connection.
-        self.send_quota = u16::MAX;
-        self.max_send_quota = u16::MAX;
-        self.max_qos = None;
-
-        for property in acknowledge.properties.into_iter() {
-            match property? {
-                Property::MaximumPacketSize(size) => {
-                    self.maximum_packet_size.replace(size);
-                }
-                Property::AssignedClientIdentifier(id) => {
-                    self.session_state.client_id =
-                        String::from_str(id.0).or(Err(ProtocolError::ProvidedClientIdTooLong))?;
-                }
-                Property::ServerKeepAlive(keep_alive) => {
-                    self.keep_alive_interval = Milliseconds(keep_alive as u32 * 1000);
-                }
-                Property::ReceiveMaximum(max) => {
-                    self.send_quota = max.max(self.session_state.max_send_quota());
-                    self.max_send_quota = max.max(self.session_state.max_send_quota());
-                }
-                Property::MaximumQoS(max) => {
-                    self.max_qos = Some(QoS::try_from(max).map_err(|_| ProtocolError::WrongQos)?);
-                }
-                _prop => info!("Ignoring property: {:?}", _prop),
-            };
+    fn handle_auth(&mut self, a: &AuthP) -> Result<(), Self::GuardError> {
+        let Some(old_chal) = self.session_state.generated_challenge else {
+            return Err(MinimqError::Protocol(ProtocolError::Failed(ReasonCode::BadAuthMethod)))
+        };
+        if let Some(tag) = a.tag {
+            if !validate_tag(tag, KEY, old_chal, &self.session_state.client_id) {
+                // drop connection
+                return Err(MinimqError::Protocol(ProtocolError::InvalidProperty))
+            }
+            return Ok(())
         }
 
         self.register_connection()?;
@@ -506,7 +473,8 @@ impl<'buf, TcpStack: TcpClientStack, Clock: embedded_time::Clock, Broker: crate:
                         self.sm.process_event(Events::TcpConnected)?;
                     }
                 }
-            }
+            },
+            States::Authenticating => {},
             States::Restart => self.handle_restart()?,
             States::Active => self.handle_active()?,
             States::Establishing => {}
@@ -529,8 +497,8 @@ impl<'buf, TcpStack: TcpClientStack, Clock: embedded_time::Clock, Broker: crate:
         ) -> T,
     {
         match control_packet {
-            ReceivedPacket::ConnAck(ack) => {
-                self.sm.process_event(Events::Connected(ack))?;
+            ReceivedPacket::AuthP(a) => {
+                self.sm.process_event(Events::Connected(a))?;
 
                 return if self.sm.context_mut().session_state.was_reset() {
                     Err(Error::SessionReset)
@@ -656,6 +624,15 @@ impl<'buf, TcpStack: TcpClientStack, Clock: embedded_time::Clock, Broker: crate:
                 return Ok(Some(f(self, info.topic.0, info.payload, &info.properties)));
             }
 
+            ReceivedPacket::PubReq(info) => {
+                let state = &self.sm.context().session_state;
+                let tag = compute_tag(KEY, info.challenge, &state.client_id).unwrap();
+                self.network.send_packet(&AuthP {
+                    challenge: rand_chacha::ChaCha20Rng::from_entropy().gen(),
+                    tag: Some(tag)
+                })?;
+
+            },
             _ => {
                 self.sm
                     .process_event(Events::ControlPacket(control_packet))?;

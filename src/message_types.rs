@@ -1,7 +1,6 @@
 use crate::{
     packets::{
-        ConnAck, Connect, Disconnect, PingReq, PingResp, Pub, PubAck, PubComp, PubRec, PubRel,
-        SubAck, Subscribe,
+        AuthP, ConnAck, Connect, Disconnect, PingReq, PingResp, Pub, PubAck, PubComp, PubRec, PubRel, PubReq, SubAck, Subscribe
     },
     Retain,
 };
@@ -33,6 +32,14 @@ pub trait ControlPacket {
     fn fixed_header_flags(&self) -> u8 {
         0u8
     }
+}
+
+impl ControlPacket for AuthP {
+    const MESSAGE_TYPE: MessageType = MessageType::Auth;
+}
+
+impl<'a> ControlPacket for PubReq<'a> {
+    const MESSAGE_TYPE: MessageType = MessageType::Auth;
 }
 
 impl<'a> ControlPacket for Connect<'a> {

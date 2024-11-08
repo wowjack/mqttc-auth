@@ -235,6 +235,20 @@ pub struct Disconnect<'a> {
     pub properties: Properties<'a>,
 }
 
+/// An MQTT PUBREQ authentication request packet
+#[derive(Debug, Deserialize)]
+pub struct PubReq<'a> {
+    pub topic: &'a str,
+    pub challenge: [u8; 12],
+}
+
+/// An MQTT AUTH authentication exchange packet
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AuthP {
+    pub challenge: [u8; 12],
+    pub tag: Option<[u8; 16]>,
+}
+
 /// Success information for a control packet with optional data.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Reason<'a> {

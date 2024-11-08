@@ -1,6 +1,6 @@
 use crate::{
     message_types::MessageType,
-    packets::{ConnAck, Disconnect, Pub, PubAck, PubComp, PubRec, PubRel, SubAck},
+    packets::{AuthP, ConnAck, Disconnect, Pub, PubAck, PubComp, PubRec, PubRel, PubReq, SubAck},
     varint::Varint,
     ProtocolError, QoS, Retain,
 };
@@ -21,6 +21,8 @@ pub enum ReceivedPacket<'a> {
     PubRec(PubRec<'a>),
     PubComp(PubComp<'a>),
     Disconnect(Disconnect<'a>),
+    AuthP(AuthP),
+    PubReq(PubReq<'a>),
     PingResp,
 }
 
